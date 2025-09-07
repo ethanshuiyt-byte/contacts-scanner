@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Contact Lens Scanner — Fast Inventory</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Arial;background:#0f172a;color:#e5e7eb}
+  .container{max-width:1200px;margin:0 auto;padding:18px;display:flex;flex-direction:column;gap:16px}
+  .card{background:#0b1223;border:1px solid #1f2937;border-radius:14px;padding:14px}
+  .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:16px}
+  @media (max-width: 1000px){.grid{grid-template-columns:1fr}}
+  h1{font-size:1.6rem}
+  .wrap{position:relative;border:1px dashed #334155;border-radius:12px;background:#0a0f1f;min-height:320px;display:flex;align-items:center;justify-content:center}
+  video{max-width:100%;display:block}
+  #frame{display:none}
+  canvas{max-width:100%}
+  #overlay{position:absolute;inset:0;pointer-events:none}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+  .btn{background:#1f2937;border:1px solid #374151;border-radius:999px;padding:8px 14px;color:#fff;cursor:pointer;font-weight:600}
+  .btn-primary{background:#3b82f6;border-color:#60a5fa}
+  .btn-danger{background:#ef4444;border-color:#f87171}
+  .pill{font-size:.8rem;background:#111827;border:1px solid #374151;border-radius:999px;padding:4px 8px}
+  label{font-size:.9rem;color:#93c5fd}
+  input, select{background:#0b1223;border:1px solid #334155;border-radius:10px;padding:8px 10px;color:#e5e7eb}
+  table{width:100%;border-collapse:collapse;margin-top:10px}
+  th,td{border-bottom:1px solid #1f2937;padding:8px 6px;font-size:.95rem;text-align:left}
+  th{color:#93c5fd}
+  .hint{font-size:.9rem;background:#111827;border:1px solid #374151;border-radius:10px;padding:10px;color:#cbd5e1}
+  .flash{box-shadow:0 0 0 3px #16a34a inset; border-radius:12px; animation:flash 350ms ease-out}
+  @keyframes flash{0%{box-shadow:0 0 0 3px #16a34a inset}100%{box-shadow:0 0 0 0px rgba(0,0,0,0) inset}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+</head>
+<body>
+<div class="container">
+  <div class="card">
+    <h1>📦 Contact Lens Scanner — Fast Inventory</h1>
+    <div class="hint">
+      Live, camera-only. Hold the box so the printed label is inside the blue rectangle. Scans in ~1–3s, beeps on success, logs automatically to the table below. Use <b>Export CSV</b> when done.
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card" id="scanCard">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <span id="chip-env" class="pill">env</span>
+        <span id="chip-ocr" class="pill">ocr</span>
+        <span id="chip-status" class="pill">idle</span>
+      </div>
+      <div class="wrap" id="wrap">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="frame"></canvas>
+        <canvas id="overlay"></canvas>
+        <div id="placeholder" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#64748b;text-align:center;padding:10px">
+          Start camera → Live Scan: On. Keep the printed label inside the big blue box.
+        </div>
+      </div>
+      <div class="controls">
+        <button id="btnStart" class="btn btn-primary">🎥 Start camera</button>
+        <button id="btnStop" class="btn btn-danger" disabled>⏹ Stop</button>
+        <button id="btnLive" class="btn">▶️ Live Scan: Off</button>
+        <select id="boxSize">
+          <option value="0.7" selected>Box size: 70%</option>
+          <option value="0.8">Box size: 80%</option>
+          <option value="0.6">Box size: 60%</option>
+        </select>
+        <button id="btnExport" class="btn">⬇️ Export CSV</button>
+        <button id="btnClear" class="btn">🧹 Clear Table</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Latest Fields</h3>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+        <div><label>Brand</label><input id="brand" placeholder="Acuvue Oasys" readonly/></div>
+        <div><label>Type</label><input id="type" placeholder="Daily / Toric…" readonly/></div>
+        <div><label>Power (SPH)</label><input id="power" placeholder="-1.25" readonly/></div>
+        <div><label>CYL</label><input id="cyl" placeholder="-0.75" readonly/></div>
+        <div><label>AXIS</label><input id="axis" placeholder="10–180" readonly/></div>
+        <div><label>BC</label><input id="bc" placeholder="8.5" readonly/></div>
+        <div><label>DIA</label><input id="dia" placeholder="14.0" readonly/></div>
+        <div><label>Expiry</label><input id="expiry" type="date" readonly/></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Inventory (live)</h3>
+    <table id="table">
+      <thead>
+        <tr>
+          <th>Timestamp</th><th>Brand</th><th>Type</th><th>Power</th><th>CYL</th><th>AXIS</th><th>BC</th><th>DIA</th><th>Expiry</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const chip=(el,txt,ok)=>{el.textContent=txt; el.style.background=ok?'#065f46':'#3f1d1d'};
+const setChip=(el,label,color)=>{el.textContent=label; el.style.background=color;};
+const secure = location.protocol==='https:' || location.hostname==='localhost' || location.hostname==='127.0.0.1';
+chip($('chip-env'), secure?'Secure ✅':'Not secure (no cam) ❌', secure);
+
+// Beep on success
+function beep(){
+  try{
+    const ctx = new (window.AudioContext||window.webkitAudioContext)();
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.type='sine'; o.frequency.value=880; // A5
+    g.gain.setValueAtTime(0.001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime+0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.18);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(); o.stop(ctx.currentTime+0.2);
+    setTimeout(()=>ctx.close(),300);
+  }catch(e){/* ignore */}
+}
+
+// OCR
+let worker=null;
+async function ensureWorker(){
+  if(!worker){
+    setChip($('chip-ocr'),'OCR loading…','#92400e');
+    worker = await Tesseract.createWorker({logger:()=>{}});
+    await worker.loadLanguage('eng');
+    await worker.initialize('eng');
+    chip($('chip-ocr'),'OCR ready ✅',true);
+  }
+}
+async function setNumericMode(){
+  await worker.setParameters({
+    tessedit_pageseg_mode: '6',
+    tessedit_char_whitelist: '0123456789.+-/: ',
+    user_defined_dpi: '250',
+    preserve_interword_spaces: '1'
+  });
+}
+async function setFullMode(){
+  await worker.setParameters({
+    tessedit_pageseg_mode: '6',
+    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.+-/: ',
+    user_defined_dpi: '250',
+    preserve_interword_spaces: '1'
+  });
+}
+
+function cleanupText(t){
+  return (t||'')
+    .replace(/[—–]/g,'-')
+    .replace(/\bO\b/g,'0')
+    .replace(/\bI\b/g,'1')
+    .replace(/(\d)\s+(\d)/g,'$1$2');
+}
+function clamp(v,min,max){ v=parseFloat(v); if(isNaN(v)) return ''; return Math.max(min,Math.min(max,v)); }
+function round(v,dp){ const n=parseFloat(v); if(isNaN(n)) return ''; const m=Math.pow(10,dp); return (Math.round(n*m)/m).toFixed(dp); }
+
+function parseFields(text){
+  const U = cleanupText(text.toUpperCase());
+  const getNumAfter=(labelRx)=>{
+    const m = labelRx.exec(U);
+    if(!m) return '';
+    const tail = U.slice(m.index + m[0].length);
+    const n = /[+\-]?\d+(?:\.\d{1,2})?/.exec(tail);
+    return n? n[0] : '';
+  };
+  let brand = (/(ACUVUE OASYS|ACUVUE|BIOFINITY|DAILIES|AIR OPTIX|PRECISION1|MYDAY|CLARITI|ULTRA|TOTAL|SOFLENS|INFUSE)/.exec(U)||[])[1]||'';
+  if(brand==='OASYS' && U.includes('ACUVUE')) brand='ACUVUE OASYS';
+  const type = (/(DAILY|ONE[- ]DAY|MONTHLY|TORIC|MULTIFOCAL|ASTIGMATISM)/.exec(U)||[])[1]||'';
+
+  let power = getNumAfter(/\b(?:PWR|POWER|SPH)[: ]*/);
+  let cyl   = getNumAfter(/\bCYL[: ]*/);
+  let axis  = getNumAfter(/\bAX(?:IS)?[: ]*/);
+  let bc    = getNumAfter(/\bBC[: ]*/);
+  let dia   = getNumAfter(/\bDIA[: ]*/);
+
+  if(power) { power = (Math.round(parseFloat(power)*4)/4).toFixed(2); }
+  if(cyl)   { cyl   = (Math.round(parseFloat(cyl)*4)/4).toFixed(2); }
+  if(axis)  { const ax = parseInt(axis,10); axis = (ax>=0 && ax<=180)? String(ax) : ''; }
+  if(bc)    { bc    = round(clamp(bc,7.8,9.5),1); }
+  if(dia)   { dia   = round(clamp(dia,13.5,15.5),1); }
+
+  let expiryISO = '';
+  const mISO = /(20\d{2})[-\/\. ](0[1-9]|1[0-2])[-\/\. ](0[1-9]|[12]\d|3[01])/.exec(U);
+  if(mISO){ expiryISO = `${mISO[1]}-${mISO[2]}-${mISO[3]}`; }
+  else{
+    const months = {JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
+    const mName = /\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*[ ,\-]+(\d{1,2})[ ,\-]+(20\d{2})\b/.exec(U);
+    const mName2 = /\b(20\d{2})[ ,\-]+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/.exec(U);
+    if(mName){ const mm=months[mName[1]]; const dd=String(mName[2]).padStart(2,'0'); expiryISO = `${mName[3]}-${mm}-${dd}`; }
+    else if(mName2){ const mm=months[mName2[2]]; expiryISO = `${mName2[1]}-${mm}-01`; }
+  }
+  return {brand,type,power,cyl,axis,bc,dia,expiryISO};
+}
+function enough(f){
+  let n=0; ['power','cyl','axis','bc','dia','expiryISO'].forEach(k=>{ if(f[k]) n++; });
+  return n>=2;
+}
+function fillForm(f){
+  const set=(id,v)=>{ if(v) $(id).value=v; };
+  set('brand',f.brand); set('type',f.type);
+  set('power',f.power); set('cyl',f.cyl); set('axis',f.axis);
+  set('bc',f.bc); set('dia',f.dia); if(f.expiryISO) $('expiry').value=f.expiryISO;
+}
+
+// CSV
+function exportCSV(){
+  const rows=[['Timestamp','Brand','Type','Power','CYL','AXIS','BC','DIA','Expiry']];
+  document.querySelectorAll('#tbody tr').forEach(tr=>{
+    const cells=[...tr.children].map(td=>td.textContent);
+    rows.push(cells);
+  });
+  const csv = rows.map(r=>r.map(v=> `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download='inventory.csv'; a.click(); URL.revokeObjectURL(url);
+}
+
+// Scanner
+let autoscan=false, running=false, lastHash='', lastTime=0;
+function hashFields(f){
+  return [f.brand,f.type,f.power,f.cyl,f.axis,f.bc,f.dia,f.expiryISO].join('|');
+}
+function addRow(f){
+  const tr=document.createElement('tr');
+  const ts = new Date().toISOString().replace('T',' ').slice(0,19);
+  const cells=[ts,f.brand||'',f.type||'',f.power||'',f.cyl||'',f.axis||'',f.bc||'',f.dia||'',f.expiryISO||''];
+  for(const c of cells){ const td=document.createElement('td'); td.textContent=c; tr.appendChild(td); }
+  $('tbody').prepend(tr);
+}
+function drawBox(octx, x,y,w,h){ octx.clearRect(0,0,octx.canvas.width,octx.canvas.height); octx.strokeStyle='#60a5fa'; octx.lineWidth=3; octx.strokeRect(x,y,w,h); }
+
+async function scanOnce(){
+  if(!autoscan || running) return;
+  const video=$('video'), frame=$('frame'), overlay=$('overlay');
+  if(!video.videoWidth) return;
+  running=true;
+  setChip($('chip-status'),'scanning…','#92400e');
+
+  // Paint frame
+  frame.width=video.videoWidth; frame.height=video.videoHeight;
+  frame.getContext('2d').drawImage(video,0,0,frame.width,frame.height);
+
+  // Big fixed rectangle (adjustable percentage)
+  const pct=parseFloat($('boxSize').value||'0.7');
+  const boxW = Math.round(frame.width*pct);
+  const boxH = Math.round(frame.height*pct);
+  const boxX = Math.round((frame.width-boxW)/2);
+  const boxY = Math.round((frame.height-boxH)/2);
+  const octx = overlay.getContext('2d'); overlay.width=frame.width; overlay.height=frame.height;
+  drawBox(octx, boxX, boxY, boxW, boxH);
+
+  // Crop, downscale to ~800-900px width for speed
+  const crop=document.createElement('canvas'); crop.width=boxW; crop.height=boxH;
+  crop.getContext('2d').drawImage(frame, boxX, boxY, boxW, boxH, 0,0, boxW, boxH);
+  const targetW = 900;
+  const scale = Math.min(1, targetW/crop.width);
+  const scaled=document.createElement('canvas');
+  scaled.width=Math.round(crop.width*scale);
+  scaled.height=Math.round(crop.height*scale);
+  scaled.getContext('2d').imageSmoothingEnabled=false;
+  scaled.getContext('2d').drawImage(crop,0,0,scaled.width,scaled.height);
+
+  await ensureWorker();
+
+  // Pass 1: numeric fast
+  await setNumericMode();
+  let text = (await worker.recognize(scaled)).data.text || '';
+  let f = parseFields(text);
+  if(!enough(f)){
+    // Pass 2: full
+    await setFullMode();
+    text = (await worker.recognize(scaled)).data.text || text;
+    f = parseFields(text);
+  }
+
+  if(enough(f)){
+    fillForm(f);
+    const h=hashFields(f);
+    const now=Date.now();
+    if(h!==lastHash || (now-lastTime)>2000){ // dedupe within 2s
+      lastHash=h; lastTime=now;
+      // success flash + beep + log row
+      const wrap=$('wrap'); wrap.classList.remove('flash'); void wrap.offsetWidth; wrap.classList.add('flash');
+      beep();
+      addRow(f);
+      setChip($('chip-status'),'logged ✓','#065f46');
+    }else{
+      setChip($('chip-status'),'duplicate','#3f1d1d');
+    }
+    // auto reset: immediately continue scanning next frame
+  }else{
+    setChip($('chip-status'),'no read','#3f1d1d');
+  }
+  running=false;
+}
+
+const video=$('video');
+$('btnStart').onclick=async ()=>{
+  try{
+    if(!secure){ alert('Camera requires HTTPS or localhost'); return; }
+    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}},audio:false});
+    video.srcObject = stream; await video.play();
+    $('placeholder').style.display='none';
+    $('btnStop').disabled=false;
+  }catch(e){ alert('Camera error: '+e.message); }
+};
+$('btnStop').onclick=()=>{
+  const s=video.srcObject; if(s){ s.getTracks().forEach(t=>t.stop()); }
+  video.pause(); video.srcObject=null; $('btnStop').disabled=true;
+  autoscan=false; $('btnLive').textContent='▶️ Live Scan: Off';
+  setChip($('chip-status'),'idle','#1f2937');
+};
+$('btnLive').onclick=async ()=>{
+  autoscan=!autoscan;
+  $('btnLive').textContent = autoscan? '⏸️ Live Scan: On' : '▶️ Live Scan: Off';
+  if(autoscan){ await ensureWorker(); }
+};
+$('btnExport').onclick=exportCSV;
+$('btnClear').onclick=()=>{ $('tbody').innerHTML=''; };
+
+// loop
+setInterval(scanOnce, 1000);
+</script>
+</body>
+</html>
