@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Contact Lens Scanner — Pro (ROI + Torch + Zoom + Better OCR)</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Arial;background:#0f172a;color:#e5e7eb}
+  .container{max-width:1200px;margin:0 auto;padding:20px;display:flex;flex-direction:column;gap:20px}
+  .header{text-align:center}
+  .header h1{font-size:1.9rem}
+  .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:16px}
+  @media (max-width: 1000px){.grid{grid-template-columns:1fr}}
+  .card{background:#0b1223;border:1px solid #1f2937;border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.2)}
+  .section-title{font-weight:700;margin-bottom:10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .chip{font-size:.85rem;background:#111827;color:#fff;border:1px solid #374151;padding:4px 8px;border-radius:999px}
+  .camera-wrap{position:relative;border-radius:12px;overflow:hidden;border:1px dashed #334155;background:#0a0f1f;min-height:300px;display:flex;align-items:center;justify-content:center}
+  video{max-width:100%;display:none}
+  canvas{max-width:100%}
+  #overlay{position:absolute;inset:0}
+  .controls{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
+  .btn{background:#1f2937;border:1px solid #374151;border-radius:999px;padding:8px 14px;color:#fff;cursor:pointer;font-weight:600}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn-primary{background:#3b82f6;border-color:#60a5fa}
+  .btn-danger{background:#ef4444;border-color:#f87171}
+  .row{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+  @media (max-width: 720px){.row{grid-template-columns:1fr}}
+  label{font-size:.9rem;color:#93c5fd}
+  input,select{background:#0b1223;border:1px solid #334155;border-radius:10px;padding:8px 10px;color:#e5e7eb}
+  .panel{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .slider{display:flex;align-items:center;gap:10px}
+  .logs{font-family:ui-monospace,monospace;background:#0b1021;color:#d1d5db;border-radius:10px;padding:10px;max-height:220px;overflow:auto;font-size:.9rem;border:1px solid #1f2937}
+  .list{max-height:420px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+  .item{background:#0b1021;border:1px solid #1f2937;border-left:4px solid #22c55e;border-radius:10px;padding:12px;box-shadow:0 2px 10px rgba(0,0,0,.18)}
+  .toast{position:fixed;top:16px;right:16px;background:#111827;color:#fff;padding:10px 14px;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.25);z-index:9999}
+  .hint{font-size:.9rem;background:#111827;border:1px solid #374151;border-radius:10px;padding:10px;margin-top:8px;color:#cbd5e1}
+  .k{color:#93c5fd}.v{color:#fbbf24}
+
+  /* Option A: hide the processing canvas so only one camera preview shows */
+  #frame{display:none}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0"></script>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>📦 Contact Lens Scanner — Pro</h1>
+    <div class="hint">Tip: Drag to select a <b>Region of Interest (ROI)</b> around the label text or barcode, then click <b>Scan ROI</b>. Use <b>Zoom</b> and <b>Torch</b> on phones (if supported).</div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="section-title">
+        <span>📷 Scanner</span>
+        <span id="chip-env" class="chip">env</span>
+        <span id="chip-bd" class="chip">barcode</span>
+        <span id="chip-ocr" class="chip">ocr</span>
+        <span id="chip-cap" class="chip">capabilities</span>
+      </div>
+      <div class="camera-wrap">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="frame"></canvas>
+        <canvas id="overlay"></canvas>
+        <div id="placeholder" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#64748b">Start camera or upload a photo</div>
+      </div>
+      <div class="controls">
+        <button id="btnStart" class="btn btn-primary">🎥 Start camera</button>
+        <button id="btnStop" class="btn btn-danger" disabled>⏹ Stop</button>
+        <button id="btnScan" class="btn" disabled>🔎 Scan frame</button>
+        <button id="btnScanRoi" class="btn" disabled>🟦 Scan ROI</button>
+        <label for="file" class="btn">🖼 Upload photo</label>
+        <input id="file" type="file" accept="image/*" style="display:none"/>
+        <button id="btnTorch" class="btn" disabled>💡 Torch</button>
+      </div>
+      <div class="panel">
+        <div class="slider">
+          <label for="zoom">Zoom</label>
+          <input id="zoom" type="range" min="1" max="1" step="0.1" value="1" disabled/>
+        </div>
+        <div class="slider">
+          <label for="thresh">Threshold</label>
+          <input id="thresh" type="range" min="0" max="255" step="1" value="0"/>
+        </div>
+        <div class="slider">
+          <label><input type="checkbox" id="binarize"/> Binarize</label>
+        </div>
+        <div class="slider">
+          <label><input type="checkbox" id="sharpen"/> Sharpen</label>
+        </div>
+      </div>
+      <div class="logs" id="logs" hidden></div>
+      <div class="hint">If barcode doesn’t read: set ROI tightly around the barcode. For OCR: set ROI around the text row (SPH/CYL/AX/BC/DIA), enable <b>Sharpen</b> and try a small <b>Threshold</b>.</div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">📋 Parsed Fields</div>
+      <div class="row">
+        <div>
+          <label>Brand</label><input id="brand" placeholder="Acuvue, Biofinity"/>
+        </div>
+        <div>
+          <label>Type</label><input id="type" placeholder="Daily, Monthly, Toric, etc."/>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Power (SPH)</label><input id="power" placeholder="-2.50, +1.00"/>
+        </div>
+        <div>
+          <label>CYL</label><input id="cyl" placeholder="-0.75, -1.25"/>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>AXIS</label><input id="axis" placeholder="10—180"/>
+        </div>
+        <div>
+          <label>BC</label><input id="bc" placeholder="8.6"/>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>DIA</label><input id="dia" placeholder="14.0, 14.2"/>
+        </div>
+        <div>
+          <label>Qty</label><input id="qty" type="number" min="1" value="30"/>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Expiry</label><input id="expiry" type="date"/>
+        </div>
+        <div>
+          <label>Notes</label><input id="notes" placeholder="Left eye only, promo box…"/>
+        </div>
+      </div>
+      <div class="controls">
+        <button id="btnAdd" class="btn btn-primary">➕ Add to inventory</button>
+        <button id="btnClear" class="btn">🧹 Clear</button>
+      </div>
+      <div class="list" id="list"><div style="text-align:center;color:#94a3b8;padding:10px">No items yet</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const toast=(m)=>{const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),2000)};
+const logBox=$('logs'); const log=(m)=>{logBox.hidden=false;logBox.textContent+=(typeof m==='string'?m:JSON.stringify(m))+'\\n';logBox.scrollTop=logBox.scrollHeight};
+function chip(el,txt,ok){el.textContent=txt;el.style.background=ok?'#064e3b':'#3f1d1d';el.style.borderColor=ok?'#10b981':'#ef4444'}
+
+const chipEnv=$('chip-env'), chipBd=$('chip-bd'), chipOcr=$('chip-ocr'), chipCap=$('chip-cap');
+const secure = location.protocol==='https:' || location.hostname==='localhost' || location.hostname==='127.0.0.1';
+chip(chipEnv, secure?'Secure ✅':'Not secure (no cam) ❌', secure);
+chip(chipBd, ('BarcodeDetector' in window)?'Native Barcode ✅':'ZXing fallback', true);
+chip(chipOcr, 'OCR loading…', false);
+
+let worker=null;
+async function ensureWorker(){
+  if(!worker){
+    worker = await Tesseract.createWorker({logger:()=>{}});
+    await worker.loadLanguage('eng');
+    await worker.initialize('eng');
+    await worker.setParameters({
+      tessedit_pageseg_mode: '6',
+      user_defined_dpi: '300',
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.+-/: ',
+      preserve_interword_spaces: '1'
+    });
+    chip(chipOcr,'OCR ready ✅',true);
+  }
+}
+
+const frame=$('frame'), overlay=$('overlay'), video=$('video'); const fctx=frame.getContext('2d'); const octx=overlay.getContext('2d');
+let stream=null, track=null, scanTimer=null, usingBD=false, codeReader=null, torchOn=false;
+let roi=null, dragging=false, startPt=null;
+
+function draw(){ if(!frame.width) return; octx.clearRect(0,0,overlay.width,overlay.height); if(roi){ octx.strokeStyle='#60a5fa'; octx.lineWidth=2; octx.strokeRect(roi.x,roi.y,roi.w,roi.h);} }
+
+overlay.addEventListener('mousedown', (e)=>{
+  if(!frame.width) return;
+  dragging=true;
+  const rect=overlay.getBoundingClientRect();
+  startPt={x:e.clientX-rect.left,y:e.clientY-rect.top};
+  roi={x:startPt.x,y:startPt.y,w:0,h:0};
+  draw();
+});
+overlay.addEventListener('mousemove', (e)=>{
+  if(!dragging) return;
+  const rect=overlay.getBoundingClientRect();
+  const x=e.clientX-rect.left, y=e.clientY-rect.top;
+  roi.w=x-startPt.x; roi.h=y-startPt.y;
+  draw();
+});
+overlay.addEventListener('mouseup', ()=>{ dragging=false; if(roi){ roi.w=Math.abs(roi.w); roi.h=Math.abs(roi.h); if(roi.w<10||roi.h<10) roi=null; draw(); }});
+
+function applyPreprocess(canvas){
+  const ctx=canvas.getContext('2d');
+  const img=ctx.getImageData(0,0,canvas.width,canvas.height);
+  const d=img.data;
+  const thresh=parseInt($('thresh').value,10);
+  const bin=$('binarize').checked;
+  const sharp=$('sharpen').checked;
+  // grayscale
+  for(let i=0;i<d.length;i+=4){ const g=0.2126*d[i]+0.7152*d[i+1]+0.0722*d[i+2]; d[i]=d[i+1]=d[i+2]=g; }
+  if(sharp){
+    // simple unsharp mask style: emphasize edges
+    const w=img.width,h=img.height;
+    const out=new Uint8ClampedArray(d.length);
+    function idx(x,y){return (y*w+x)*4}
+    for(let y=1;y<h-1;y++){
+      for(let x=1;x<w-1;x++){
+        const i=idx(x,y);
+        const g = (
+          d[idx(x-1,y-1)] + d[idx(x,y-1)] + d[idx(x+1,y-1)] +
+          d[idx(x-1,y)]   - 8*d[i]       + d[idx(x+1,y)] +
+          d[idx(x-1,y+1)] + d[idx(x,y+1)] + d[idx(x+1,y+1)]
+        );
+        const v = Math.max(0, Math.min(255, d[i] - 0.4*g));
+        out[i]=out[i+1]=out[i+2]=v; out[i+3]=255;
+      }
+    }
+    for(let i=0;i<d.length;i++){ d[i]=out[i]; }
+  }
+  if(bin){
+    for(let i=0;i<d.length;i+=4){ const v = d[i] >= thresh ? 255 : 0; d[i]=d[i+1]=d[i+2]=v; }
+  } else if(thresh>0){
+    // contrast shift around threshold
+    for(let i=0;i<d.length;i+=4){ let v=d[i]; v = (v-128)*1.2+128; v=Math.max(0,Math.min(255,v)); d[i]=d[i+1]=d[i+2]=v; }
+  }
+  ctx.putImageData(img,0,0);
+  return canvas;
+}
+
+function cleanupText(t){
+  if(!t) return '';
+  // common OCR mistakes
+  return t.replace(/O/g,'0').replace(/I/g,'1').replace(/l/g,'1').replace(/—/g,'-').replace(/–/g,'-');
+}
+
+const brands=['ACUVUE','BIOFINITY','AIR OPTIX','DAILIES','PROCLEAR','BAUSCH','ALCON','COOPER','PRECISION1','MYDAY','CLARITI','ULTRA','TOTAL','SOFLENS','INFUSE','ACUVUE OASYS'];
+const types=['DAILY','ONE-DAY','ONE DAY','MONTHLY','BI-WEEKLY','TORIC','MULTIFOCAL','ASTIGMATISM'];
+function parseFields(text){
+  const U=cleanupText(text.toUpperCase()).replace(/[_|]/g,' ').replace(/\s{2,}/g,' ');
+  const brand = brands.find(b=>U.includes(b)) || '';
+  const type  = types.find(t=>U.includes(t)) || (U.includes('ONE DAY')?'DAILY':'');
+  const lineRx = U.match(/\b(?:SPH|PWR|POWER)\s*([+\-]?\d{1,2}(?:\.\d{2})?)\s+(?:CYL)\s*([+\-]?\d(?:\.\d{2})?)\s+(?:AX(?:IS)?)\s*(\d{2,3})/);
+  const powerMatch = lineRx? [null,lineRx[1]] : U.match(/(?:SPH|PWR|POWER)[: ]*([+\-]?\d{1,2}(?:\.\d{2})?)/);
+  const cylMatch   = lineRx? [null,null,lineRx[2]] : U.match(/(?:CYL)[: ]*([+\-]?\d(?:\.\d{2})?)/);
+  const axisMatch  = lineRx? [null,null,null,lineRx[3]] : U.match(/(?:AXIS|AX)[: ]*(\d{2,3})/);
+  const bcMatch    = U.match(/(?:BC|BASE CURVE)[: ]*(\d(?:\.\d{1,2})?)/);
+  const diaMatch   = U.match(/(?:DIA|DIAM(?:ETER)?)[: ]*(\d{2}(?:\.\d)?)/);
+  const qtyMatch   = U.match(/\b(30|90|6|12)\s*(?:PK|PACK|LENSES?)\b/);
+  let expiryISO=''; 
+  const exp1 = U.match(/(?:EXP|EXPI?RY|USE BY)[: ]*([0-9]{4})[-\/ ]([0-1][0-9])/);
+  const exp2 = U.match(/(?:EXP|EXPI?RY|USE BY)[: ]*([0-1][0-9])[\/\-]([0-9]{2})/);
+  const exp3 = U.match(/(?:EXP|EXPI?RY|USE BY)[: ]*([A-Z]{3})\s*([0-9]{4})/);
+  if(exp1){ expiryISO = `${exp1[1]}-${exp1[2]}-01`; }
+  else if(exp2){ const y = '20'+exp2[2]; const m = exp2[1]; expiryISO = `${y}-${m}-01`; }
+  else if(exp3){ const months={JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'}; const m=months[exp3[1]]||'01'; expiryISO = `${exp3[2]}-${m}-01`; }
+  const fields={
+    brand: brand?brand.toLowerCase().replace(/\b\w/g,c=>c.toUpperCase()):'',
+    type: type?type.toLowerCase().replace(/\b\w/g,c=>c.toUpperCase()):'',
+    power: powerMatch? (powerMatch[1]||powerMatch[0]) : '',
+    cyl: cylMatch? (cylMatch[1]||cylMatch[2]) : '',
+    axis: axisMatch? (axisMatch[1]||axisMatch[3]) : '',
+    bc: bcMatch?bcMatch[1]:'',
+    dia: diaMatch?diaMatch[1]:'',
+    qty: qtyMatch?qtyMatch[1]:'',
+    expiryISO
+  };
+  return fields;
+}
+
+function fillForm(fields){
+  const m=(k,v)=>{ if(v!==undefined && v!==null && v!==''){ $(k).value=v; } };
+  m('brand',fields.brand); m('type',fields.type);
+  m('power',fields.power); m('cyl',fields.cyl); m('axis',fields.axis);
+  m('bc',fields.bc); m('dia',fields.dia); m('qty',fields.qty); if(fields.expiryISO) $('expiry').value=fields.expiryISO;
+}
+
+async function scanCanvas(source){
+  overlay.width=source.width; overlay.height=source.height; frame.width=source.width; frame.height=source.height;
+  fctx.drawImage(source,0,0,frame.width,frame.height);
+  octx.clearRect(0,0,overlay.width,overlay.height);
+  // Barcode first
+  const canvasForScan = document.createElement('canvas');
+  canvasForScan.width=source.width; canvasForScan.height=source.height;
+  canvasForScan.getContext('2d').drawImage(source,0,0);
+  // ROI crop if present
+  let cropCanvas=canvasForScan;
+  if(roi){
+    const cx=document.createElement('canvas'); cx.width=Math.max(1,roi.w); cx.height=Math.max(1,roi.h);
+    cx.getContext('2d').drawImage(canvasForScan, roi.x, roi.y, roi.w, roi.h, 0,0, cx.width, cx.height);
+    cropCanvas=cx;
+  }
+  // preprocess
+  applyPreprocess(cropCanvas);
+
+  // Native BarcodeDetector or ZXing
+  try{
+    if('BarcodeDetector' in window){ usingBD=true; if(!window.__bd){ window.__bd=new BarcodeDetector({formats:['ean_13','code_128','qr_code','upc_a','upc_e','ean_8','codabar']}); }
+      const res = await window.__bd.detect(cropCanvas);
+      if(res && res.length){
+        const text = res[0].rawValue || '';
+        fillForm(parseFields(text));
+        toast('Barcode detected'); return true;
+      }
+    }
+  }catch(e){ log('BD: '+e.message); }
+  try{
+    if(!codeReader){ codeReader = new ZXing.BrowserMultiFormatReader(); }
+    const src = new ZXing.HTMLCanvasElementLuminanceSource(cropCanvas);
+    const bmp = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(src));
+    const out = codeReader.decode(bmp);
+    if(out && out.getText()){
+      fillForm(parseFields(out.getText()));
+      toast('Barcode detected (ZXing)'); return true;
+    }
+  }catch(e){ /* ignore */ }
+
+  // OCR pass
+  await ensureWorker();
+  const ocrCanvas = document.createElement('canvas');
+  ocrCanvas.width=cropCanvas.width; ocrCanvas.height=cropCanvas.height;
+  ocrCanvas.getContext('2d').drawImage(cropCanvas,0,0);
+  const { data:{ text } } = await worker.recognize(ocrCanvas);
+  const fields = parseFields(text||'');
+  if(Object.values(fields).some(v=>v)){
+    fillForm(fields); toast('OCR parsed'); return true;
+  }
+  return false;
+}
+
+// Inventory
+const invKey='contactLensInventory'; let inventory=JSON.parse(localStorage.getItem(invKey)||'[]');
+function save(){localStorage.setItem(invKey,JSON.stringify(inventory))}
+function renderList(){
+  const list=$('list');
+  if(!inventory.length){ list.innerHTML='<div style="text-align:center;color:#94a3b8;padding:10px">No items yet</div>'; return; }
+  list.innerHTML = inventory.map(it=>`<div class="item">
+    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+      <strong>${it.brand||'—'} ${it.type||''}</strong>
+      <button class="btn btn-danger" onclick="removeItem(${it.id})">Remove</button>
+    </div>
+    <div style="font-size:.95rem;color:#e5e7eb;margin-top:6px">
+      <div><span class="k">SPH</span> <span class="v">${it.power||'—'}</span> <span class="k">CYL</span> <span class="v">${it.cyl||'—'}</span> <span class="k">AX</span> <span class="v">${it.axis||'—'}</span> <span class="k">BC</span> <span class="v">${it.bc||'—'}</span> <span class="k">DIA</span> <span class="v">${it.dia||'—'}</span></div>
+      <div><span class="k">Qty</span> <span class="v">${it.qty||'—'}</span> <span class="k">Expiry</span> <span class="v">${it.expiry?new Date(it.expiry).toLocaleDateString(): '—'}</span></div>
+      ${it.notes?`<div><span class="k">Notes</span> ${it.notes}</div>`:''}
+    </div></div>`).join('');
+}
+function removeItem(id){ inventory=inventory.filter(x=>x.id!==id); save(); renderList(); toast('Removed'); }
+renderList();
+$('btnAdd').onclick=()=>{
+  const item={
+    id:Date.now(),
+    brand:$('brand').value.trim(),
+    type:$('type').value.trim(),
+    power:$('power').value.trim(),
+    cyl:$('cyl').value.trim(),
+    axis:$('axis').value.trim(),
+    bc:$('bc').value.trim(),
+    dia:$('dia').value.trim(),
+    qty:+$('qty').value||0,
+    expiry:$('expiry').value||'',
+    notes:$('notes').value.trim()
+  };
+  if(!item.brand || !item.qty){ toast('Brand & qty required'); return; }
+  inventory.push(item); save(); renderList(); toast('Added'); 
+};
+$('btnClear').onclick=()=>['brand','type','power','cyl','axis','bc','dia','qty','expiry','notes'].forEach(id=>$(id).value='');
+
+// Camera control
+$('btnStart').onclick=async ()=>{
+  try{
+    if(!secure){ toast('Use HTTPS or localhost for camera'); return; }
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:2560},height:{ideal:1440}},audio:false});
+    video.srcObject = stream; await video.play();
+    track = stream.getVideoTracks()[0];
+    $('placeholder').style.display='none';
+    video.style.display='block';
+    // draw one frame size
+    frame.width=video.videoWidth; frame.height=video.videoHeight;
+    overlay.width=video.videoWidth; overlay.height=video.videoHeight;
+    // Capabilities
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    const settings = track.getSettings ? track.getSettings() : {};
+    chip(chipCap, `zoom:${caps.zoom?caps.zoom.min+'-'+caps.zoom.max:'na'} torch:${caps.torch?'yes':'no'} res:${settings.width||'?'}x${settings.height||'?'}`, true);
+    // Zoom slider
+    if(caps.zoom){ const z=$('zoom'); z.disabled=false; z.min=caps.zoom.min; z.max=caps.zoom.max; z.step=caps.zoom.step||0.1; z.value=settings.zoom||caps.zoom.min;
+      z.oninput=()=>{ track.applyConstraints({advanced:[{zoom:parseFloat(z.value)}]}).catch(()=>{}); };
+    }
+    // Torch btn
+    if(caps.torch){ $('btnTorch').disabled=false; $('btnTorch').onclick=async ()=>{
+      torchOn=!torchOn;
+      try{ await track.applyConstraints({advanced:[{torch:torchOn}]}); toast(torchOn?'Torch on':'Torch off'); }catch(e){ toast('Torch not supported in this mode'); }
+    }; }
+    $('btnStop').disabled=false; $('btnScan').disabled=false; $('btnScanRoi').disabled=false;
+    // Loop draw for preview
+    if(!scanTimer){
+      scanTimer = setInterval(()=>{
+        if(video.videoWidth){
+          frame.width=video.videoWidth; frame.height=video.videoHeight;
+          overlay.width=video.videoWidth; overlay.height=video.videoHeight;
+          fctx.drawImage(video,0,0,frame.width,frame.height);
+          draw();
+        }
+      }, 100);
+    }
+  }catch(e){ toast('Camera error: '+e.message); log(e.message); }
+};
+$('btnStop').onclick=()=>{
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); }
+  stream=null; track=null; if(scanTimer){ clearInterval(scanTimer); scanTimer=null; }
+  video.pause(); video.srcObject=null; video.style.display='none'; $('placeholder').style.display='flex';
+  $('btnStop').disabled=true; $('btnScan').disabled=true; $('btnScanRoi').disabled=true; $('btnTorch').disabled=true; $('zoom').disabled=true;
+};
+$('btnScan').onclick=async ()=>{
+  const ok = await scanCanvas(frame);
+  if(!ok) toast('Nothing detected — tighten ROI or adjust preprocessing');
+};
+$('btnScanRoi').onclick=async ()=>{
+  if(!roi){ toast('Draw an ROI first'); return; }
+  const ok = await scanCanvas(frame);
+  if(!ok) toast('Nothing detected in ROI — adjust size/threshold/sharpen');
+};
+
+// Upload path
+$('file').onchange=async (e)=>{
+  const file = e.target.files[0]; if(!file) return;
+  const img=new Image();
+  img.onload=()=>{
+    const scale = Math.min(1, 1800/img.width);
+    frame.width=Math.round(img.width*scale); frame.height=Math.round(img.height*scale);
+    overlay.width=frame.width; overlay.height=frame.height;
+    fctx.drawImage(img,0,0,frame.width,frame.height);
+    $('placeholder').style.display='none';
+    video.style.display='none';
+  };
+  img.src=URL.createObjectURL(file);
+};
+
+</script>
+</body>
+</html>
