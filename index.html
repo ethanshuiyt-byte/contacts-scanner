@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Universal Barcode & QR Scanner (QR + Data Matrix)</title>
+<style>
+  :root { --accent:#2b8a3e; --bg:#0b0c10; --fg:#e6eef6; --muted:#9fb3c8; }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:16px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;}
+  header{padding:14px 16px;border-bottom:1px solid #1c222b;background:#0f1116;position:sticky;top:0;z-index:5}
+  h1{margin:0;font-size:18px;letter-spacing:.2px}
+  main{display:grid;gap:12px;padding:12px;max-width:960px;margin:0 auto}
+  .panel{background:#11151c;border:1px solid #1a2330;border-radius:12px;padding:12px}
+  #viewport-wrap{position:relative;overflow:hidden;border-radius:12px}
+  #video{width:100%;display:block;aspect-ratio:4/3;background:#000;border-radius:12px}
+  .box{position:absolute;inset:10% 15%;border:3px solid var(--accent);border-radius:10px;box-shadow:0 0 0 9999px rgba(0,0,0,.35) inset;pointer-events:none;}
+  .corn{position:absolute;width:28px;height:28px;border:4px solid var(--accent)}
+  .corn.tl{top:-4px;left:-4px;border-right:none;border-bottom:none;border-radius:10px 0 0 0}
+  .corn.tr{top:-4px;right:-4px;border-left:none;border-bottom:none;border-radius:0 10px 0 0}
+  .corn.bl{bottom:-4px;left:-4px;border-right:none;border-top:none;border-radius:0 0 0 10px}
+  .corn.br{bottom:-4px;right:-4px;border-left:none;border-top:none;border-radius:0 0 10px 0}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  select,button,input[type="file"]{background:#0f1520;border:1px solid #223049;color:var(--fg);border-radius:10px;padding:10px 12px;font-size:14px}
+  button.primary{background:var(--accent);border-color:#1f6b30;color:#fff}
+  button.ghost{background:#0f1520}
+  button:disabled{opacity:.5}
+  #result{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;background:#0c1117;border:1px dashed #2a3648;border-radius:10px;padding:10px;white-space:pre-wrap}
+  .kv{display:grid;grid-template-columns:120px 1fr;gap:6px;margin-top:6px;color:var(--muted)}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#13202e;border:1px solid #243449;margin-right:6px}
+  footer{opacity:.65;text-align:center;padding:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Universal Barcode & QR Scanner — Data Matrix • QR • EAN • Code128</h1>
+</header>
+<main>
+  <section class="panel" id="cameraPanel">
+    <div id="viewport-wrap">
+      <video id="video" muted playsinline></video>
+      <div class="box" aria-hidden="true">
+        <div class="corn tl"></div><div class="corn tr"></div>
+        <div class="corn bl"></div><div class="corn br"></div>
+      </div>
+    </div>
+    <div class="controls">
+      <select id="cameraSelect" title="Camera"></select>
+      <button id="startBtn" class="primary">Start</button>
+      <button id="stopBtn" class="ghost" disabled>Stop</button>
+      <button id="torchBtn" class="ghost" disabled>Torch</button>
+      <label class="pill"><input type="checkbox" id="beepChk" checked> Beep</label>
+      <label class="pill"><input type="checkbox" id="autoCopyChk" checked> Auto-copy</label>
+      <label class="pill"><input type="checkbox" id="continuousChk" checked> Continuous</label>
+      <input id="filePicker" type="file" accept="image/*" />
+    </div>
+    <div class="kv">
+      <div>Status</div><div id="status">Idle</div>
+      <div>Format</div><div id="fmt">—</div>
+      <div>Time</div><div id="ts">—</div>
+    </div>
+  </section>
+  <section class="panel">
+    <strong>Decoded Data</strong>
+    <div id="result" aria-live="polite">—</div>
+    <div class="controls">
+      <button id="copyBtn">Copy</button>
+      <button id="shareBtn">Share</button>
+      <button id="clearBtn">Clear</button>
+    </div>
+    <div id="hints" class="kv" style="margin-top:10px">
+      <div>Tips</div>
+      <div>Use good lighting. Hold steady inside the green box. Data Matrix on contact-lens boxes often have tiny modules; move closer until it fills the box.</div>
+    </div>
+  </section>
+</main>
+<footer>Runs fully in your browser. Best on Chrome/Edge/Brave (Android) or Chrome (desktop). iOS Safari requires HTTPS.</footer>
+<script type="module">
+  import {BrowserMultiFormatReader,BarcodeFormat,DecodeHintType} from "https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/esm/index.min.js";
+  const video=document.getElementById('video');const cameraSelect=document.getElementById('cameraSelect');const startBtn=document.getElementById('startBtn');const stopBtn=document.getElementById('stopBtn');const torchBtn=document.getElementById('torchBtn');const statusEl=document.getElementById('status');const fmtEl=document.getElementById('fmt');const tsEl=document.getElementById('ts');const resultEl=document.getElementById('result');const copyBtn=document.getElementById('copyBtn');const shareBtn=document.getElementById('shareBtn');const clearBtn=document.getElementById('clearBtn');const filePicker=document.getElementById('filePicker');const beepChk=document.getElementById('beepChk');const autoCopyChk=document.getElementById('autoCopyChk');const continuousChk=document.getElementById('continuousChk');
+  const beep=new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQgAAAAA/////wD///8A//8AAP//AAD//wD///8A");
+  const hints=new Map();hints.set(DecodeHintType.POSSIBLE_FORMATS,[BarcodeFormat.DATA_MATRIX,BarcodeFormat.QR_CODE,BarcodeFormat.AZTEC,BarcodeFormat.PDF_417,BarcodeFormat.CODE_128,BarcodeFormat.CODE_39,BarcodeFormat.EAN_13,BarcodeFormat.EAN_8,BarcodeFormat.UPC_A,BarcodeFormat.UPC_E,BarcodeFormat.ITF]);hints.set(DecodeHintType.TRY_HARDER,true);
+  const reader=new BrowserMultiFormatReader(hints,500);let currentDeviceId=null;let currentStream=null;let scanning=false;
+  async function listCameras(){const devices=await navigator.mediaDevices.enumerateDevices();const vids=devices.filter(d=>d.kind==='videoinput');cameraSelect.innerHTML='';for(const d of vids){const opt=document.createElement('option');opt.value=d.deviceId;opt.textContent=d.label||`Camera ${cameraSelect.length+1}`;cameraSelect.appendChild(opt);}if(vids.length)currentDeviceId=vids[vids.length-1].deviceId;cameraSelect.value=currentDeviceId||'';cameraSelect.disabled=vids.length<=1;}
+  async function start(){if(scanning)return;scanning=true;status('Requesting camera…');const deviceId=cameraSelect.value||currentDeviceId;currentDeviceId=deviceId;const constraints={video:{deviceId:deviceId?{exact:deviceId}:undefined,width:{ideal:1920},height:{ideal:1080},focusMode:"continuous"},audio:false};currentStream=await navigator.mediaDevices.getUserMedia(constraints);video.srcObject=currentStream;await video.play();const track=currentStream.getVideoTracks()[0];const caps=track.getCapabilities?.()||{};torchBtn.disabled=!('torch'in caps);status('Scanning…');startBtn.disabled=true;stopBtn.disabled=false;reader.decodeFromVideoDevice(deviceId,video,(res,err,ctl)=>{if(!scanning)return;if(res){const txt=res.getText();const format=res.getBarcodeFormat();showResult(txt,format);if(beepChk.checked){try{beep.currentTime=0;beep.play();}catch(e){}}if(autoCopyChk.checked)navigator.clipboard?.writeText(txt).catch(()=>{});if(!continuousChk.checked){status('Paused (result captured)');ctl.stop();stopBtn.disabled=true;startBtn.disabled=false;scanning=false;}}});}
+  async function stop(){scanning=false;try{await reader.reset();}catch(e){}if(currentStream){currentStream.getTracks().forEach(t=>t.stop());currentStream=null;}torchBtn.disabled=true;startBtn.disabled=false;stopBtn.disabled=true;status('Stopped');}
+  function status(msg){statusEl.textContent=msg;tsEl.textContent=new Date().toLocaleTimeString();}
+  function showResult(text,format){fmtEl.textContent=BarcodeFormat[format]||'Unknown';resultEl.textContent=text||'—';}
+  let torchOn=false;torchBtn.addEventListener('click',async()=>{if(!currentStream)return;const track=currentStream.getVideoTracks()[0];try{await track.applyConstraints({advanced:[{torch:!torchOn}]});torchOn=!torchOn;torchBtn.textContent=torchOn?'Torch (On)':'Torch';}catch(e){console.warn('Torch not supported',e);}});
+  cameraSelect.addEventListener('change',async()=>{if(scanning){await stop();await start();}});startBtn.addEventListener('click',start);stopBtn.addEventListener('click',stop);copyBtn.addEventListener('click',()=>navigator.clipboard?.writeText(resultEl.textContent||''));clearBtn.addEventListener('click',()=>{resultEl.textContent='—';fmtEl.textContent='—';});shareBtn.addEventListener('click',async()=>{const data=resultEl.textContent.trim();if(!data)return;if(navigator.share){try{await navigator.share({text:data,title:'Scanned Code'});}catch(e){}}else{alert('Sharing not supported; copied to clipboard.');navigator.clipboard?.writeText(data);}});filePicker.addEventListener('change',async(ev)=>{const f=ev.target.files?.[0];if(!f)return;const img=new Image();img.onload=async()=>{try{const res=await reader.decodeFromImage(img);showResult(res.getText(),res.getBarcodeFormat());if(beepChk.checked){try{beep.currentTime=0;beep.play();}catch(e){}}status('Decoded from image');}catch(e){status('No code found in image');}};img.src=URL.createObjectURL(f);});(async()=>{if(!('mediaDevices'in navigator)){status('Camera API not available in this browser.');startBtn.disabled=true;return;}await listCameras();try{const perm=await navigator.permissions.query({name:'camera'});if(perm.state==='granted')start();}catch(_){}})();
+</script>
+</body>
+</html>
